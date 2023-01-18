@@ -356,7 +356,7 @@ set_property -dict {PACKAGE_PIN F25 IOSTANDARD LVCMOS33} [get_ports sdMOSI]
 #set_property -dict {PACKAGE_PIN B8 IOSTANDARD LVCMOS33} [get_ports eth_interrupt]
 
 ##Quad SPI Flash
-set_property -dict {PACKAGE_PIN C8 IOSTANDARD LVCMOS33} [get_ports {QspiSCK}]
+# set_property -dict {PACKAGE_PIN C8  IOSTANDARD LVCMOS33} [get_ports QspiSCK]   ## Dedicated CCLK_0 Config clock pin, don't declare it again
 set_property -dict {PACKAGE_PIN B24 IOSTANDARD LVCMOS33} [get_ports {QspiDB[0]}]
 set_property -dict {PACKAGE_PIN A25 IOSTANDARD LVCMOS33} [get_ports {QspiDB[1]}]
 set_property -dict {PACKAGE_PIN B22 IOSTANDARD LVCMOS33} [get_ports {QspiDB[2]}]
