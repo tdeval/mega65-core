@@ -122,3 +122,10 @@ tests/vunit_out
 # hyppotest outputs
 FAIL.*
 PASS.*
+
+# VHDL simulation waveforms
+*.vcd
+*.vcd.fst
+
+# VHDL TestBench files
+vunit_out/*

@@ -20,8 +20,8 @@ end debugtools;
 
 package body debugtools is
 
-      procedure HWRITE(L:inout LINE; VALUE:in BIT_VECTOR;
-    JUSTIFIED:in SIDE := RIGHT; FIELD:in WIDTH := 0) is      
+    procedure HWRITE(L:inout LINE; VALUE:in BIT_VECTOR;
+    JUSTIFIED:in SIDE := RIGHT; FIELD:in WIDTH := 0) is
       variable quad: bit_vector(0 to 3);
       constant ne:   integer := (value'length+3)/4;
       constant displaybits: integer := ne*4;
@@ -32,7 +32,7 @@ package body debugtools is
     begin
 
       bv(emptybits to (emptybits+value'length-1)) := value;
-    
+
       for i in 0 to ne-1 loop
         quad := bv(4*i to 4*i+3);
         case quad is
@@ -55,11 +55,11 @@ package body debugtools is
         end case;
       end loop;
       write(L, s, JUSTIFIED, FIELD);
-    end HWRITE; 
-    
+    end HWRITE;
+
     function to_string(sv: Std_Logic_Vector) return string is
       use Std.TextIO.all;
-      
+
       variable bv: bit_vector(sv'range) := to_bitvector(sv);
       variable lp: line;
     begin
@@ -69,7 +69,7 @@ package body debugtools is
 
     function to_hstring(sv: Std_Logic_Vector) return string is
       use Std.TextIO.all;
-      
+
       variable bv: bit_vector(sv'range) := to_bitvector(sv);
       variable lp: line;
     begin
@@ -79,21 +79,21 @@ package body debugtools is
 
     function to_hstring(sv: unsigned) return string is
       use Std.TextIO.all;
-      
+
     begin
       return to_hstring(std_logic_vector(sv));
     end;
 
     function to_hstring(sv: signed) return string is
       use Std.TextIO.all;
-      
+
     begin
       return to_hstring(std_logic_vector(sv));
     end;
-      
+
     function to_hexstring(sv: Std_Logic_Vector) return string is
       use Std.TextIO.all;
-      
+
       variable bv: bit_vector(sv'range) := to_bitvector(sv);
       variable lp: line;
     begin
@@ -103,18 +103,18 @@ package body debugtools is
 
     function to_hexstring(sv: unsigned) return string is
       use Std.TextIO.all;
-      
+
     begin
       return to_hexstring(std_logic_vector(sv));
     end;
 
     function to_hexstring(sv: signed) return string is
       use Std.TextIO.all;
-      
+
     begin
       return to_hexstring(std_logic_vector(sv));
     end;
-      
+
 
 
       function safe_to_integer(sv : unsigned) return integer is
@@ -131,5 +131,5 @@ package body debugtools is
         end loop;
         return v;
       end;
-      
+
 end debugtools;

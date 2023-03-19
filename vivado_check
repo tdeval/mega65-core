@@ -1,0 +1,27 @@
+#!/bin/bash
+design=$1
+if [[ -z $VIVADO ]]; then
+    VIVADO=./vivado_wrapper
+fi
+${VIVADO} -init -mode tcl << EOF | tee ${design}.check.log | grep -v INFO
+open_project vivado/${design}.xpr
+check_syntax
+EOF
+
+echo
+echo "========================================"
+echo "        CHECK RESULT"
+echo "========================================"
+grep -E "^[A-Z0-9 ]+:" ${design}.check.log | grep -v INFO | awk -F: '{print $1}' | sort | uniq -c
+echo "========================================"
+
+crit=$(grep -cE "^CRITICAL" ${design}.check.log)
+if [[ $crit -gt 0 ]]; then
+    echo "      !!!!!!! CHECK FAILED !!!!!!!"
+    echo "========================================"
+    echo
+    exit 1
+fi
+echo "            CHECK SUCCEEDED"
+echo "========================================"
+exit 0

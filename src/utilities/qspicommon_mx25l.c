@@ -13,8 +13,6 @@
 struct m65_tm tm_start;
 struct m65_tm tm_now;
 
-void wait_for_fire(void);
-
 unsigned char slot_count = 0;
 
 short i, x, y, z;
@@ -28,22 +26,35 @@ unsigned int num_4k_sectors = 0;
 
 unsigned char first, last, verboseProgram = 0;
 
-unsigned char part[256];
+unsigned char part[32];
 
 unsigned int page_size = 0;
+unsigned int page_program_time = 0;
+unsigned int sector_erase_time = 0;
+unsigned char page_bits = 0;
 unsigned char latency_code = 0xff;
-unsigned char reg_cr1 = 0x00;
+unsigned char reg_scur = 0x00;
 unsigned char reg_sr1 = 0x00;
+// unsigned char reg_sr2 = 0x00;
+unsigned char reg_cr1 = 0x00;
+// unsigned char reg_cr2 = 0x00;
+// unsigned char reg_cr3 = 0x00;
 
 unsigned char manufacturer;
 unsigned short device_id;
-unsigned char cfi_data[512];
+//unsigned char buf_data[512];
 unsigned short cfi_length = 0;
 unsigned char flash_sector_bits = 0;
 unsigned char last_sector_num = 0xff;
 unsigned char sector_num = 0xff;
 
 unsigned char reconfig_disabled = 0;
+
+// parameterizable commands
+unsigned char cmd_clsr = 0x30;
+unsigned char cmd_be4b = 0xdc;
+unsigned char cmd_se4b = 0x21;
+unsigned char cmd_pp4b = 0x3e;
 
 unsigned char data_buffer[512];
 // Magic string for identifying properly loaded bitstream
@@ -57,6 +68,18 @@ unsigned short mb = 0;
 unsigned char buffer[512];
 
 const unsigned long sd_timeout_value = 100000;
+
+/***************************************************************************
+
+ Private function prototypes
+
+ ***************************************************************************/
+void fetch_sfdp(void);
+void read_cr1(void);
+void write_srcr(unsigned char sr, unsigned char cr);
+void read_scur(void);
+void write_scur(unsigned char val);
+
 
 /***************************************************************************
 
@@ -94,7 +117,44 @@ static unsigned char input_key;
 
 unsigned char check_input(char *m, uint8_t case_sensitive)
 {
-  return 0;
+  while (PEEK(0xD610))
+    POKE(0xD610, 0);
+
+  while (*m) {
+    // Weird CC65 PETSCII/ASCII fix ups
+    if (*m == 0x0a)
+      *m = 0x0d;
+
+    while (!(input_key = PEEK(0xD610)));
+    POKE(0xD610, 0);
+    if (input_key != ((*m) & 0x7f)) {
+      if (case_sensitive)
+        return 0;
+      if (input_key != ((*m ^ 0x20) & 0x7f))
+        return 0;
+    }
+    m++;
+  }
+
+  return 1;
+}
+
+unsigned char press_any_key(unsigned char attention, unsigned char nomessage)
+{
+  if (!nomessage)
+    printf("\nPress any key to continue.\n");
+
+  // clear key buffer
+  while (PEEK(0xD610))
+    POKE(0xD610, 0);
+  while (!(input_key = PEEK(0xD610)))
+    if (attention) // attention lets the border flash
+      POKE(0xD020, PEEK(0xD020) + 1);
+  if (attention)
+    POKE(0xD020, 0);
+
+  POKE(0xD610, 0);
+  return input_key;
 }
 
 unsigned char debcd(unsigned char c)
@@ -640,32 +700,43 @@ unsigned char select_bitstream_file(void)
   draw_file_list();
   while (1) {
 
-    unsigned char v;
-    v=PEEK(0xDC00)&0x1f;
-    x = joy_to_key_disk[PEEK(0xDC00) & PEEK(0xDC01) & 0x1f];
-    //
-    if (!v) {
-      v=PEEK(0xD6A0)>>3;    
-      if (!(v&16)) x=0x0d; // FIRE/F_INDEX = return
-      if (!(v&1)) x=0x91;  // UP/F_DISKCHANGED = CRSR-UP
-      if (!(v&8)) x=0x1d;  // RIGHT/F_TRACK0 = CRSR-RIGHT
-      if (!(v&4)) x=0x9d;  // LEFT/F_WRITEPROTECT = CRSR-LEFT
-      if (!(v&2)) x=0x11;  // DOWN/F_RDATA = CRSR-DOWN
-      // Wait for joystick presses to be released before continuing
-    }
-    while (v!=0x1f) {
-      v=PEEK(0xDC00)&0x1f;
-      if (!v) v=PEEK(0xD6A0)>>3;
-    }            
+#ifndef JOYFLASH
+    x = PEEK(0xD610U);
+#else
+    x=0;
+#endif
     
     if (!x) {
+      unsigned char v;
+      v=PEEK(0xDC00)&0x1f;
+      x = joy_to_key_disk[PEEK(0xDC00) & PEEK(0xDC01) & 0x1f];
+      //
+      if (!v) {
+	v=PEEK(0xD6A0)>>3;    
+	if (!(v&16)) x=0x0d; // FIRE/F_INDEX = return
+	if (!(v&1)) x=0x91;  // UP/F_DISKCHANGED = CRSR-UP
+	if (!(v&8)) x=0x1d;  // RIGHT/F_TRACK0 = CRSR-RIGHT
+	if (!(v&4)) x=0x9d;  // LEFT/F_WRITEPROTECT = CRSR-LEFT
+	if (!(v&2)) x=0x11;  // DOWN/F_RDATA = CRSR-DOWN
+	// Wait for joystick presses to be released before continuing
+      }
+      while (v!=0x1f) {
+	v=PEEK(0xDC00)&0x1f;
+	if (!v) v=PEEK(0xD6A0)>>3;
+      }            
+    }
+
+    if (!x) {
       idle_time++;
-      
+
       usleep(10000);
       continue;
     }
     else
       idle_time = 0;
+
+    // Clear read key
+    POKE(0xD610U, 0);
 
     switch (x) {
     case 0x03: // RUN-STOP = make no change
@@ -723,7 +794,7 @@ void reconfig_fpga(unsigned long addr)
            "You %ccan't%c start a core from flash after\n"
            "having started the system via JTAG.\n",
         0x93, 158, 5, 158, 5);
-    wait_for_fire();
+    press_any_key(0, 0);
     printf("%c", 0x93);
     return;
   }
@@ -804,7 +875,7 @@ int check_model_id_field(unsigned char megaonly)
 
   if (!bytes_returned) {
     printf("Failed to read .cor file.\n");
-    wait_for_fire();
+    press_any_key(0, 0);
     return 0;
   }
 
@@ -814,7 +885,7 @@ int check_model_id_field(unsigned char megaonly)
       break;
   if (x < 16) {
     printf("\n%c.COR file has no COR signature!%c\n", 0x1c, 0x05);
-    wait_for_fire();
+    press_any_key(0, 0);
     return 0;
   }
 
@@ -827,7 +898,7 @@ int check_model_id_field(unsigned char megaonly)
       printf("\n%cThis is no valid MEGA65 .COR file!\n\n"
              "Refusing to flash!%c\n",
           0x1c, 0x05);
-      wait_for_fire();
+      press_any_key(0, 0);
       return 0;
     }
   }
@@ -839,9 +910,11 @@ int check_model_id_field(unsigned char megaonly)
   if (hardware_model_id == core_model_id) {
     printf("%cVerified .COR file matches hardware.\n"
            "Safe to flash.%c\n\n"
-           "Press FIRE to continue, or turn off computer to abort.\n",
+           "Press any key to continue,\nRUN/STOP or ESC to abort.\n",
         0x1e, 0x05);
-    wait_for_fire();
+    bytes_returned = press_any_key(0, 1);
+    if (bytes_returned == 0x03 || bytes_returned == 0x1b) // run/stop and esc aborts
+      return 0;
     return 1;
   }
 
@@ -853,15 +926,15 @@ int check_model_id_field(unsigned char megaonly)
     if (!check_input("y", CASE_INSENSITIVE))
       return 0;
 
-    printf("Press FIRE to proceed to flash\n");
-    wait_for_fire();
+    printf("Ok, will proceed to flash\n");
+    press_any_key(0, 0);
     return 1;
   }
 
   printf("%cVerification error!\n"
          "This .COR file is not intended for this hardware.%c\n",
       0x1c, 0x05);
-  wait_for_fire();
+  press_any_key(0, 0);
   return 0;
 }
 
@@ -892,6 +965,111 @@ unsigned char slot_empty_check(unsigned short mb_num)
 
 void flash_inspector(void)
 {
+#ifdef QSPI_FLASH_INSPECT
+  addr = 0;
+  read_data(addr);
+  printf("Flash @ $%08x:\n", addr);
+  for (i = 0; i < 256; i++) {
+    if (!(i & 15))
+      printf("+%03x : ", i);
+    printf("%02x", data_buffer[i]);
+    if ((i & 15) == 15)
+      printf("\n");
+  }
+
+  printf("page_size=%d\n", page_size);
+
+  while (1) {
+    x = 0;
+    while (!x) {
+      x = PEEK(0xd610);
+    }
+
+    if (x) {
+      POKE(0xd610, 0);
+      switch (x) {
+      case 0x51:
+      case 0x71:
+        addr -= 0x10000;
+        break;
+      case 0x41:
+      case 0x61:
+        addr += 0x10000;
+        break;
+      case 0x11:
+      case 0x44:
+      case 0x64:
+        addr += 256;
+        break;
+      case 0x91:
+      case 0x55:
+      case 0x75:
+        addr -= 256;
+        break;
+      case 0x1d:
+      case 0x52:
+      case 0x72:
+        addr += 0x400000;
+        break;
+      case 0x9d:
+      case 0x4c:
+      case 0x6c:
+        addr -= 0x400000;
+        break;
+      case 0x03:
+        return;
+      case 0x50:
+      case 0x70:
+        query_flash_protection(addr);
+        press_any_key(0, 0);
+        break;
+      case 0x54:
+      case 0x74:
+        // T = Test
+        // Erase page, write page, read it back
+        erase_sector(addr);
+        // Some known data
+        for (i = 0; i < 256; i++) {
+          data_buffer[i] = i;
+          data_buffer[0x1ff - i] = i;
+        }
+        data_buffer[0] = addr >> 24L;
+        data_buffer[1] = addr >> 16L;
+        data_buffer[2] = addr >> 8L;
+        data_buffer[3] = addr >> 0L;
+        addr += 256;
+        data_buffer[0x100] = addr >> 24L;
+        data_buffer[0x101] = addr >> 16L;
+        data_buffer[0x102] = addr >> 8L;
+        data_buffer[0x103] = addr >> 0L;
+        addr -= 256;
+        //        lfill(0xFFD6E00,0xFF,0x200);
+        printf("E: %02x %02x %02x\n", lpeek(0xffd6e00), lpeek(0xffd6e01), lpeek(0xffd6e02));
+        printf("F: %02x %02x %02x\n", lpeek(0xffd6f00), lpeek(0xffd6f01), lpeek(0xffd6f02));
+        printf("P: %02x %02x %02x\n", data_buffer[0], data_buffer[1], data_buffer[2]);
+        // Now program it
+        unprotect_flash(addr);
+        query_flash_protection(addr);
+        printf("About to call program_page()\n");
+        //        program_page(addr,page_size);
+        program_page(addr, 256);
+        press_any_key(0, 0);
+      }
+
+      read_data(addr);
+      printf("%cFlash @ $%08lx:\n", 0x93, addr);
+      for (i = 0; i < 256; i++) {
+        if (!(i & 15))
+          printf("+%03x : ", i);
+        printf("%02x", data_buffer[i]);
+        if ((i & 15) == 15)
+          printf("\n");
+      }
+      printf("Bytes differ? %s\n", PEEK(0xD689) & 0x40 ? "Yes" : "No");
+      printf("page_size=%d\n", page_size);
+    }
+  }
+#endif
 }
 
 unsigned char flash_region_differs(unsigned long attic_addr, unsigned long flash_addr, long size)
@@ -916,7 +1094,7 @@ unsigned char flash_region_differs(unsigned long attic_addr, unsigned long flash
         //          if ((i&15)==15) printf("\n");
       }
       printf("%c", 5);
-      wait_for_fire();
+      press_any_key(0, 0);
       for (i = 256; i < 512; i++) {
         if (!(i & 15))
           printf("%c%07lx:", 5, flash_addr + i);
@@ -929,7 +1107,7 @@ unsigned char flash_region_differs(unsigned long attic_addr, unsigned long flash
       }
       printf("%c", 5);
       printf("repeated verify yields %d\n", verify_data_in_place(flash_addr));
-      wait_for_fire();
+      press_any_key(0, 0);
 #endif
       return 1;
     }
@@ -942,7 +1120,7 @@ unsigned char flash_region_differs(unsigned long attic_addr, unsigned long flash
 
 void reflash_slot(unsigned char slot)
 {
-  unsigned long d, d_last, size, waddr;
+  unsigned long /* d, d_last, */ size, waddr;
   unsigned short bytes_returned;
   unsigned char fd, tries;
   unsigned char erase_mode = 0;
@@ -955,7 +1133,7 @@ void reflash_slot(unsigned char slot)
   if (selected_file == 1 && slot == 0) {
     // we refuse to erase slot 0
     printf("%c%c\nRefusing to erase slot 0!%c\n\n", 0x93, 0x1c, 0x5);
-    wait_for_fire();
+    press_any_key(0, 0);
     return;
   }
 #endif
@@ -1010,7 +1188,8 @@ void reflash_slot(unsigned char slot)
       // Couldn't open the file.
       printf("ERROR: Could not open flash file '%s'\n", disk_name_return);
 
-      wait_for_fire();
+      press_any_key(0, 0);
+
       return;
     }
 
@@ -1025,12 +1204,12 @@ void reflash_slot(unsigned char slot)
     progress = 0;
     printf("%cLoading COR file into Attic RAM...\n", 0x93);
 
-    d_last = 0;
+    // d_last = 0;
     getciartc(&tm_start);
     for (addr = 0; addr < SLOT_SIZE; addr += 512) {
       progress_acc += 512;
 #ifdef A100T
-      if (progress_acc > 26214) {
+      if (progress_acc > 26214UL) {
         progress_acc -= 26214;
         progress++;
         progress_bar(progress);
@@ -1043,6 +1222,7 @@ void reflash_slot(unsigned char slot)
       }
 #endif
 
+      /*
       if (!(addr & 0xffff)) {
         getciartc(&tm_now);
         d = seconds_between(&tm_start, &tm_now);
@@ -1057,6 +1237,7 @@ void reflash_slot(unsigned char slot)
                 0x11, 0x11, 0x11, 0x11, speed, eta);
         }
       }
+      */
 
       bytes_returned = hy_read512();
 
@@ -1071,7 +1252,7 @@ void reflash_slot(unsigned char slot)
     // start flashing
     progress_acc = 0;
     progress = 0;
-    d_last = 0;
+    // d_last = 0;
     getciartc(&tm_start);
 
     addr = SLOT_SIZE * slot;
@@ -1101,10 +1282,22 @@ void reflash_slot(unsigned char slot)
           // secret Ctrl-F (keycode 0x06) will launch flash inspector,
           // but only if QSPI_FLASH_INSPECTOR is defined!
           // otherwise: endless loop!
+#ifdef QSPI_FLASH_INSPECTOR
+          printf("Press Ctrl-F for Flash Inspector.\n");
+
+          while (PEEK(0xD610))
+            POKE(0xD610, 0);
+          while (PEEK(0xD610) != 0x06)
+            POKE(0xD610, 0);
+          while (PEEK(0xD610))
+            POKE(0xD610, 0);
+          flash_inspector();
+#else
           printf("Please turn the system off!\n");
           // don't let the user do anything else
           while (1)
             POKE(0xD020, PEEK(0xD020) & 0xf);
+#endif
 
           hy_close();
           // don't do anything else, as this will result in slot 0 corruption
@@ -1152,6 +1345,7 @@ void reflash_slot(unsigned char slot)
       addr += size;
 
       getciartc(&tm_now);
+      /*
       d = seconds_between(&tm_start, &tm_now);
       // This division is _really_ slow, which is why we do it only
       // once per second.
@@ -1163,6 +1357,7 @@ void reflash_slot(unsigned char slot)
           printf("%c%c%c%c%c%c%c%c%c\nFlashing at %dKB/sec, done in %ld sec.          \n", 0x13, 0x11, 0x11, 0x11, 0x11,
               0x11, 0x11, 0x11, 0x11, speed, eta);
       }
+      */
     }
     flash_time = seconds_between(&tm_start, &tm_now);
 
@@ -1179,7 +1374,7 @@ void reflash_slot(unsigned char slot)
     printf("%c", 0x93);
 
     // Erase mode
-    d_last = 0;
+    // d_last = 0;
     getciartc(&tm_start);
     progress_acc = 0;
     progress = 0;
@@ -1214,6 +1409,7 @@ void reflash_slot(unsigned char slot)
       addr += size;
 
       getciartc(&tm_now);
+      /*
       d = seconds_between(&tm_start, &tm_now);
       // This division is _really_ slow, which is why we do it only
       // once per second.
@@ -1225,6 +1421,7 @@ void reflash_slot(unsigned char slot)
           printf("%c%c%c%c%c%c%c%c%c\nErasing at %dKB/sec, done in %ld sec.          \n", 0x13, 0x11, 0x11, 0x11, 0x11, 0x11,
               0x11, 0x11, 0x11, speed, eta);
       }
+      */
     }
     flash_time = seconds_between(&tm_start, &tm_now);
   }
@@ -1239,7 +1436,7 @@ void reflash_slot(unsigned char slot)
            "   Flash: %d sec \n"
            "\n", load_time, flash_time);
 
-  wait_for_fire();
+  press_any_key(1, 0);
 
   hy_close(); // there was once an intent to pass (fd), but it wasn't getting used
 
@@ -1252,8 +1449,20 @@ void reflash_slot(unsigned char slot)
 
  ***************************************************************************/
 
+void hex2a(unsigned char in, unsigned char out[2])
+{
+  char tmp = '0' + (in & 0xf0) >> 4;
+  if (tmp > '9') tmp += ('@' - '9');
+  out[0] = tmp;
+  tmp = '0' + (in & 0x0f);
+  if (tmp > '9') tmp += ('@' - '9');
+  out[1] = tmp;
+}
+
 void probe_qspi_flash(void)
 {
+  unsigned char* cfi_data = &data_buffer[0];
+
   spi_cs_high();
   usleep(50000L);
 
@@ -1283,7 +1492,7 @@ void probe_qspi_flash(void)
   fetch_rdid();
   read_registers();
   while ((manufacturer == 0xff) && (device_id == 0xffff)) {
-    printf("%cERROR: Cannot communicate with QSPI\nflash device. Retry...%c\n\n", 28, 5);
+    // printf("%cERROR: Cannot communicate with QSPI\nflash device. Retry...%c\n\n", 28, 5);
 
     flash_reset();
     fetch_rdid();
@@ -1291,98 +1500,196 @@ void probe_qspi_flash(void)
   }
   
 
-#ifdef QSPI_VERBOSE
-  for (i = 0; i < 0x80; i++) {
+#if 0 && defined QSPI_VERBOSE // || defined QSPI_VERBOSE_SMALL
+  for (i = 0; i < 0x200; i++) {
     if (!(i & 15))
       printf("+%03x : ", i);
     printf("%02x", (unsigned char)cfi_data[i]);
     if ((i & 15) == 15)
       printf("\n");
+    if ((i & 255) == 255)
+      press_any_key(0, 0);
   }
-  wait_for_fire();
+  // press_any_key(0, 0);
   printf("\nQSPI Information\n\n");
 #endif
-
-  // this looks for ALT?\00 at cfi_data pos 0x51
-  if (cfi_data[0x51] == 0x41 && cfi_data[0x52] == 0x4c && cfi_data[0x53] == 0x54 && cfi_data[0x56] == 0x00) {
-    for (i = 0; i < cfi_data[0x57]; i++)
-      part[i] = cfi_data[0x58 + i];
-    part[i] = 0;
-#ifdef QSPI_VERBOSE
-    printf("Part         = %s\n"
-           "Part Family  = %02x-%c%c\n", part, cfi_data[5], cfi_data[6], cfi_data[7]);
-#endif
-  }
-  else {
-    part[0] = 0;
-#ifdef QSPI_VERBOSE
-    printf("%cPart         = unknown %02x %02x %02x\n"
-           "Part Family  = unknown%c\n", 28, cfi_data[0x51], cfi_data[0x52], cfi_data[0x53], 5);
-#endif
-  }
 
 #ifdef QSPI_VERBOSE
   printf("Manufacturer = $%02x\n", manufacturer);
   printf("Device ID    = $%04x\n", device_id);
   printf("RDID count   = %d\n", cfi_length);
-  printf("Sector Arch  = ");
 #endif
 
-  if (cfi_data[4] == 0x00) {
-#ifdef QSPI_VERBOSE
-    printf("uniform 256kb\n");
-#endif
-    num_4k_sectors = 0;
-    flash_sector_bits = 18;
-  }
-  else if (cfi_data[4] == 0x01) {
-    num_4k_sectors = 1 + cfi_data[0x2d];
-    flash_sector_bits = 16;
-#ifdef QSPI_VERBOSE
-    printf("%dx4kb param/64kb data\n", num_4k_sectors);
-#endif
-  }
-  else {
-#ifdef QSPI_VERBOSE
-    printf("%cunknown ($%02x)%c\n", 28, cfi_data[4], 5);
-#endif
-    flash_sector_bits = 0;
-  }
-#ifdef QSPI_VERBOSE
-  printf("Prgtime      = 2^%d us\n"
-         "Page size    = 2^%d bytes\n", cfi_data[0x20], cfi_data[0x2a]);
-#endif
-
-  if (cfi_data[0x2a] == 8)
-    page_size = 256;
-  if (cfi_data[0x2a] == 9)
-    page_size = 512;
-  if (!page_size) {
-    printf("%cWARNING: Unsupported page size%c\n", 28, 5);
-    page_size = 0;
-  }
-#ifdef QSPI_VERBOSE
-  printf("Est. prgtime = %d us/byte.\n", cfi_data[0x20] / cfi_data[0x2a]);
-  printf("Est. erasetm = 2^%d ms/sector.\n", cfi_data[0x21]);
-  wait_for_fire();  
-#endif
-
-  // Work out size of flash in MB
-  {
-    unsigned char n = cfi_data[0x27];
-    mb = 1;
-    n -= 20;
-    while (n) {
-      mb = mb << 1;
-      n--;
+  // Deal with CFI structure.
+  if (cfi_length > 0) {
+    /*
+    // this looks for ALT?\00 at cfi_data pos 0x51
+    if (cfi_data[0x51] == 0x41 && cfi_data[0x52] == 0x4c && cfi_data[0x53] == 0x54 && cfi_data[0x56] == 0x00) {
+      for (i = 0; i < cfi_data[0x57]; i++)
+        part[i] = cfi_data[0x58 + i];
+      part[i] = 0;
+  #ifdef QSPI_VERBOSE
+      printf("Part         = %s\n"
+            "Part Family  = %02x-%c%c\n", part, cfi_data[5], cfi_data[6], cfi_data[7]);
+  #endif
     }
+    else {
+      part[0] = 0;
+  #ifdef QSPI_VERBOSE
+      printf("%cPart         = unknown %02x %02x %02x\n"
+            "Part Family  = unknown%c\n", 28, cfi_data[0x51], cfi_data[0x52], cfi_data[0x53], 5);
+  #endif
+    }
+
+    if (cfi_data[4] == 0x00) {
+      num_4k_sectors = 0;
+      flash_sector_bits = 18;
+    }
+    else if (cfi_data[4] == 0x01) {
+      num_4k_sectors = 1 + cfi_data[0x2d];
+      flash_sector_bits = 16;
+    }
+    else {
+      flash_sector_bits = 0;
+    }
+
+    page_bits = cfi_data[0x2a];
+    if (page_bits == 8)
+      page_size = 256;
+    if (page_bits == 9)
+      page_size = 512;
+    if (!page_bits) {
+      printf("%cWARNING: Unsupported page size%c\n", 28, 5);
+      page_size = 0;
+    }
+
+    page_program_time = cfi_data[0x20] / page_bits;
+    sector_erase_time = cfi_data[0x21];
+
+    // Work out size of flash in MB
+    {
+      unsigned char n = cfi_data[0x27];
+      mb = 1;
+      n -= 20;
+      while (n) {
+        mb = mb << 1;
+        n--;
+      }
+    }
+    */
   }
+  else  // Deal with SFDP (JEDEC) parameters
+  {
+    unsigned char* sfdp_data = &data_buffer[0];
+    fetch_sfdp();
+
+    #if 0 && defined QSPI_VERBOSE // || defined QSPI_VERBOSE_SMALL
+      press_any_key(0, 0);
+      printf("\nSFDP dump\n\n");
+      for (i = 0; i < 0x200; i++) {
+        if (!(i & 15))
+          printf("+%03x : ", i);
+        printf("%02x", (unsigned char)sfdp_data[i]);
+        if ((i & 15) == 15)
+          printf("\n");
+        if ((i & 255) == 255)
+          press_any_key(0, 0);
+      }
+    #endif
+
+    // Analyze SFDP parameters blocks
+    // 1. Parse JEDEC basic (0x00) flash parameters
+    // 2. Parse JEDEC 4-addr extension
+    // 3. Parse JEDEC sector map extension
+    // Ignore manufacturer-specific parameters
+
+    for (i=0; i<=sfdp_data[6]; i++) {
+      x = sfdp_data[13+8*i] << 8 | sfdp_data[12+8*i];
+      switch (sfdp_data[8+8*i]) {
+        case 0x00:
+          // Flash size
+          if (sfdp_data[x+7] & 0x80) {
+            mb = 1 << ((sfdp_data[x+5] << 8 | sfdp_data[x+4]) - 23);  // convert address size to MB
+          } else {
+            mb = (sfdp_data[x+7] << 1 | (sfdp_data[x+6] >> 7) & 0x01) + 1;  // convert address bits to MB
+          }
+          // Block size
+          if (sfdp_data[x+16]) {
+            flash_sector_bits = sfdp_data[x+32];
+            num_4k_sectors = 1<< (flash_sector_bits - 12);  // number of 4k pages/block
+            cmd_pp4b = 0x3e;
+            POKE(0xD687, cmd_pp4b);
+          } else {
+            flash_sector_bits = 18;
+            num_4k_sectors = 0;
+          }
+          // Page size
+          page_bits = (sfdp_data[x+40] & 0xf0) >> 4;
+          page_size = 1 << page_bits;
+          // Program time
+          page_program_time = 2 * ((unsigned int)(sfdp_data[x+40] & 0x0f) + 1) * ((unsigned int)(sfdp_data[x+41] & 0x1f) + 1) * (((sfdp_data[x+41] & 0x20) == 0)?8:64);
+          sector_erase_time = 2 * ((unsigned int)(sfdp_data[x+36] & 0x0f) + 1)
+                                * ((unsigned int)((sfdp_data[x+37] << 4 | sfdp_data[x+36] >> 4) & 0x1f) + 1);
+          switch (sfdp_data[x+37] & 0x06) {
+            case 2:
+              sector_erase_time *= 16;
+              break;
+            case 4:
+              sector_erase_time *= 128;
+              break;
+            case 6:
+              sector_erase_time *= 1000;
+              break;
+          }
+          break;
+        case 0x84:
+          // Check sector erase4 instruction
+          if (sfdp_data[x+4] != 0xff)
+            cmd_se4b = sfdp_data[x+4];
+          // Check block erase4 instruction
+          if (sfdp_data[x+6] != 0xff)
+            cmd_be4b = sfdp_data[x+6];
+          break;
+        default:
+          break;
+      }
+    }
+
+    // Put device ID in part name
+    hex2a(manufacturer,&part[0]);
+    hex2a(device_id >> 8,&part[2]);
+    hex2a(device_id & 0xFF,&part[4]);
+    part[6] = 0x00;
+  }
+
+#ifdef QSPI_VERBOSE
+  printf("Sector Arch  = ");
+
+  switch (flash_sector_bits) {
+    case 18:
+      printf("uniform 256kb\n");
+      break;
+    case 16:
+      printf("%dx4kB param/64kB data\n", num_4k_sectors);
+      break;
+    default:
+      printf("%cunknown ($%02x)%c\n", 28, flash_sector_bits, 5);
+  }
+  printf("Prgtime      = %d us\n"
+         "Page size    = %d bytes\n", page_program_time, page_size);
+#endif
+
+#ifdef QSPI_VERBOSE
+  printf("Est. prgtime = %d us/byte.\n", page_program_time / page_size);
+  printf("Est. erasetm = %d ms/sector.\n", sector_erase_time);
+  // press_any_key(0, 0);
+#endif
 
   slot_count = mb / SLOT_MB;
-  // latency_code=3;
+  read_registers();
   latency_code = reg_cr1 >> 6;
 
-#ifdef QSPI_VERBOSE
+#if defined QSPI_VERBOSE // || defined QSPI_VERBOSE_SMALL
   printf("\n"
           "Flash size   = %dMB\n"
           "Flash slots  = %d slots of %dMB\n"
@@ -1411,25 +1718,30 @@ void probe_qspi_flash(void)
       POKE(0xD020, PEEK(0xD020) + 1);
   }
 
-#ifdef QSPI_VERBOSE
-  wait_for_fire();
-#endif
+  #if defined QSPI_VERBOSE // || defined QSPI_VERBOSE_SMALL
+    press_any_key(0, 0);
+  #endif
 
   /* The 64MB = 512Mbit flash in the MEGA65 R3A comes write-protected, and with
      quad-SPI mode disabled. So we have to fix both of those (which then persists),
      and then flash the bitstream.
   */
-  enable_quad_mode();
+  // Do not enable Quad I/O (QPI) mode, use only 4 x I/O dedicated instructions with SPI command.
+  // Quad I/O is tricky as we have to switch to 4 x I/O transfers for everything, even command byte.
+  // We would need a dedicated QPI aware firmware/bitstream to use that.
+  // enable_quad_mode();
 
   read_registers();
 
   if (reg_sr1 & 0x80) {
-    printf("\n%cERROR: Could not clear whole-of-flash write-protect flag.%c\n", 28, 5);
+    printf("\n%cERROR: write-protect flag.%c\n", 28, 5);
     while (1)
       POKE(0xD020, PEEK(0xD020) + 1);
   }
 
+  #if defined QSPI_VERBOSE
   printf("\nQuad-mode enabled,\nflash is write-enabled.\n\n");
+  #endif
 
   // Finally make sure that there is no half-finished QSPI commands that will cause erroneous
   // reads of sectors.
@@ -1437,7 +1749,9 @@ void probe_qspi_flash(void)
   read_data(0);
   read_data(0);
 
+  #if defined QSPI_VERBOSE
   printf("Done probing flash.\n\n");
+  #endif
 }
 
 void enable_quad_mode(void)
@@ -1447,20 +1761,10 @@ void enable_quad_mode(void)
   delay();
   spi_cs_low();
   delay();
-  spi_tx_byte(0x06); // WREN
+  spi_tx_byte(0x35); // EQIO
   spi_cs_high();
   delay();
-
-  spi_cs_high();
   spi_clock_high();
-  delay();
-  spi_cs_low();
-  delay();
-  spi_tx_byte(0x01);
-  spi_tx_byte(0x00);
-  // Latency code = 01, quad mode=1
-  spi_tx_byte(0x42);
-  spi_cs_high();
   delay();
 
   // Wait for busy flag to clear
@@ -1480,7 +1784,7 @@ void unprotect_flash(unsigned long addr)
 
   i = addr >> flash_sector_bits;
 
-  c = 0;
+  c = 0x00;
   while (c != 0xff) {
 
     // Wait for busy flag to clear
@@ -1496,14 +1800,15 @@ void unprotect_flash(unsigned long addr)
     delay();
     spi_cs_low();
     delay();
+    // WRDPB
     spi_tx_byte(0xe1);
-    spi_tx_byte(i >> 6);
-    spi_tx_byte(i << 2);
-    spi_tx_byte(0);
-    spi_tx_byte(0);
-
+    spi_tx_byte(addr >> 24);
+    spi_tx_byte(addr >> 16);
+    spi_tx_byte(addr >> 8);
+    spi_tx_byte(addr);
+    /// Unlock block
     spi_tx_byte(0xff);
-    spi_clock_low();
+    // spi_clock_low();
 
     spi_cs_high();
     delay();
@@ -1519,11 +1824,12 @@ void unprotect_flash(unsigned long addr)
     delay();
     spi_cs_low();
     delay();
+    // RDDPB
     spi_tx_byte(0xe0);
-    spi_tx_byte(i >> 6);
-    spi_tx_byte(i << 2);
-    spi_tx_byte(0);
-    spi_tx_byte(0);
+    spi_tx_byte(addr >> 24);
+    spi_tx_byte(addr >> 16);
+    spi_tx_byte(addr >> 8);
+    spi_tx_byte(addr);
     c = spi_rx_byte();
 
     spi_cs_high();
@@ -1539,18 +1845,19 @@ void query_flash_protection(unsigned long addr)
 
   i = addr >> flash_sector_bits;
 
-  printf("DYB Protection flag: ");
+  printf("DPB Protection flag: ");
 
   spi_cs_high();
   spi_clock_high();
   delay();
   spi_cs_low();
   delay();
+    // RDDPB
   spi_tx_byte(0xe0);
-  spi_tx_byte(i >> 6);
-  spi_tx_byte(i << 2);
-  spi_tx_byte(0);
-  spi_tx_byte(0);
+  spi_tx_byte(addr >> 24);
+  spi_tx_byte(addr >> 16);
+  spi_tx_byte(addr >> 8);
+  spi_tx_byte(addr);
   c = spi_rx_byte();
   printf("$%02x ", c);
 
@@ -1558,17 +1865,18 @@ void query_flash_protection(unsigned long addr)
   delay();
   printf("\n");
 
-  printf("PPB Protection flags: ");
+  printf("SPB Protection flags: ");
   spi_cs_high();
   spi_clock_high();
   delay();
   spi_cs_low();
   delay();
+    // RDSPB
   spi_tx_byte(0xe2);
-  spi_tx_byte(i >> 6);
-  spi_tx_byte(i << 2);
-  spi_tx_byte(0);
-  spi_tx_byte(0);
+  spi_tx_byte(addr >> 24);
+  spi_tx_byte(addr >> 16);
+  spi_tx_byte(addr >> 8);
+  spi_tx_byte(addr);
   c = spi_rx_byte();
   printf("$%02x ", c);
 
@@ -1589,13 +1897,14 @@ void erase_sector(unsigned long address_in_sector)
 
   // XXX Clear status register (0x30)
   //  printf("clearing status register...\n");
+  reg_sr1 = 0x61;
   while (reg_sr1 & 0x61) {
     spi_cs_high();
     spi_clock_high();
     delay();
     spi_cs_low();
     delay();
-    spi_tx_byte(0x30);
+    spi_tx_byte(cmd_clsr);
     spi_cs_high();
 
     read_sr1();
@@ -1622,7 +1931,7 @@ void erase_sector(unsigned long address_in_sector)
   else {
     // Do fast 4KB sector erase
     //    printf("erasing small sector.\n");
-    spi_tx_byte(0x21);
+    spi_tx_byte(cmd_se4b);
     spi_tx_byte(address_in_sector >> 24);
     spi_tx_byte(address_in_sector >> 16);
     spi_tx_byte(address_in_sector >> 8);
@@ -1704,6 +2013,7 @@ top:
   last = 0xff;
 
   //  printf("Waiting for flash to go non-busy\n");
+  reg_sr1 = 0x03;
   while (reg_sr1 & 0x03) {
     //    printf("flash busy. ");
     read_sr1();
@@ -1762,7 +2072,7 @@ top:
     //
     // ERROR: this should be 0xffd6e00L, 512
     // but as it is never used... and it also does not work lydon@20220912
-    lcopy((unsigned long)data_buffer, 0xffd6f00L, 256);
+    lcopy((unsigned long)data_buffer, 0xffd6e00L, 512);
     POKE(0xD681, start_address >> 0);
     POKE(0xD682, start_address >> 8);
     POKE(0xD683, start_address >> 16);
@@ -1771,12 +2081,12 @@ top:
     while (PEEK(0xD680) & 3)
       POKE(0xD020, PEEK(0xD020) + 1);
     //    press_any_key(0, 0);
-    spi_clock_high();
-    spi_cs_high();
 
     //    printf("Hardware SPI write 512 done\n");
     //    press_any_key(0, 0);
   }
+  spi_clock_high();
+  spi_cs_high();
 
   // XXX For some reason the busy flag is broken here.
   // So just wait a little while, but only a little while
@@ -1813,6 +2123,32 @@ top:
   //else
   //  printf("data at $%08llx written.\n",start_address);
 
+#if 0
+  // Now verify that it has written correctly using hardware acceleration
+  // XXX Only makes sense for 512 byte page_size, as verify _always_ verifies
+  // 512 bytes.
+  if (!verify_data(start_address)) {
+    printf("verify error:\n");
+    lcopy(data_buffer,0x40000L,512);
+    read_data(start_address);
+    for(i=0;i<256;i++)
+      {
+        if (!(i&15)) printf("+%03x : ",i);
+        printf("%02x",data_buffer[i]);
+        if ((i&15)==15) printf("\n");
+      }
+    press_any_key(0, 0);
+    for(i=256;i<512;i++)
+      {
+        if (!(i&15)) printf("+%03x : ",i);
+        printf("%02x",data_buffer[i]);
+        if ((i&15)==15) printf("\n");
+      }
+    press_any_key(0, 0);
+    lcopy(0x40000L,data_buffer,512);
+    goto top;
+  }
+#endif
 }
 
 void read_data(unsigned long start_address)
@@ -1822,6 +2158,8 @@ void read_data(unsigned long start_address)
   // Full hardware-acceleration of reading, which is both faster
   // and more reliable.
   POKE(0xd020, 1);
+  // POKE(0xd6cd, 0x02);
+  spi_cs_high();
   POKE(0xD681, start_address >> 0);
   POKE(0xD682, start_address >> 8);
   POKE(0xD683, start_address >> 16);
@@ -1843,8 +2181,12 @@ void read_data(unsigned long start_address)
   POKE(0xD020, 0);
 }
 
+void spi_idle_clocks(unsigned int count);
+
 void fetch_rdid(void)
 {
+  unsigned char* cfi_data = &data_buffer[0];
+
   /* Run command 0x9F and fetch CFI etc data.
      (Section 9.2.2)
    */
@@ -1852,7 +2194,7 @@ void fetch_rdid(void)
   unsigned short i;
 
 #if 1
-  // Hardware acclerated CFI block read
+  // Hardware accelerated CFI block read
   POKE(0xd6cd, 0x02);
   spi_cs_high();
   POKE(0xD680, 0x6B);
@@ -1885,8 +2227,16 @@ void fetch_rdid(void)
   device_id = cfi_data[1] << 8;
   device_id |= cfi_data[2];
   cfi_length = cfi_data[3];
-  if (cfi_length == 0)
-    cfi_length = 512;
+  if ((cfi_data[3] == 0xff && cfi_data[4] == 0xff && cfi_data[5] == 0xff)
+   || (cfi_data[3] == cfi_data[0] && cfi_data[4] == cfi_data[1] && cfi_data[5] == cfi_data[2])) {
+    // CFI region invalid or Device ID cycling... must try to read SFDP or modern QSPI flash...
+    for (i=3; i<512; i++)
+      cfi_data[i] = 0x00;
+    cfi_length = 0;
+  }
+  else
+    if (cfi_length == 0)
+      cfi_length = 512;
 
   spi_cs_high();
   delay();
@@ -1894,30 +2244,146 @@ void fetch_rdid(void)
   delay();
 }
 
+void fetch_sfdp(void)
+{
+  unsigned char* sfdp_data = &data_buffer[0];
+
+  /* Run command 0x9F and fetch CFI etc data.
+     (Section 9.2.2)
+   */
+
+  unsigned short i, addr4 = 0;
+
+#if 1
+  // Hardware accelerated CFI block read
+  POKE(0xd6cd, 0x02);
+  spi_cs_high();
+  // Setup SFDP address 0x000000
+  POKE(0xD681, 0x00);
+  POKE(0xD682, 0x00);
+  POKE(0xD683, 0x00);
+  POKE(0xD684, 0x00);
+  // Read SFDP
+  POKE(0xD680, 0x6D);
+  // Give time to complete
+  for (i = 0; i < 512; i++)
+    continue;
+  spi_cs_high();
+  lcopy(0xffd6e00L, (unsigned long)sfdp_data, 512);
+
+#else
+  spi_cs_high();
+  spi_clock_high();
+  delay();
+  spi_cs_low();
+  delay();
+
+  spi_tx_byte(0x5a);
+  spi_tx_byte(0x00);
+  spi_tx_byte(0x00);
+  spi_tx_byte(0x00);
+  spi_tx_byte(0x00);
+
+  // Data format according to section 11.2
+
+  // Start with 3 byte manufacturer + device ID
+  // Now get the CFI data block
+  for (i = 0; i < 512; i++)
+    sfdp_data[i] = 0x00;
+  for (i = 0; i < 512; i++)
+    sfdp_data[i] = spi_rx_byte();
+#endif
+
+  spi_cs_high();
+  delay();
+  spi_clock_high();
+  delay();
+
+  // Check for offset 'SFDP' header signature.
+  if (sfdp_data[1] == 0x53 && sfdp_data[2] == 0x46 && sfdp_data[3] == 0x44 && sfdp_data[4] == 0x50) {
+    // Offset by 1 byte due to 4-byte addressing enabled on certain flash.
+    // Re-align data.
+    for (i=0; i<511; i++)
+      sfdp_data[i] = sfdp_data[i+1];
+    addr4 = 1;
+  }
+
+  // Verify 'SFDP' header signature.
+  if (sfdp_data[0] == 0x53 && sfdp_data[1] == 0x46 && sfdp_data[2] == 0x44 && sfdp_data[3] == 0x50) {
+    // SFDP is present...
+    // Browse parameter list, and compact the SFDP structure
+    z = 16 + 8 * sfdp_data[6];  // Compute start of compacted parameter list
+    #if 0 && defined QSPI_VERBOSE // || defined QSPI_VERBOSE_SMALL
+    printf("Compact %d SFDP, starting at %04x\n", sfdp_data[6]+1, z & 0xffff);
+    #endif
+    for (i=0; i<=sfdp_data[6]; i++) {
+      x = sfdp_data[11+8*i] & 0xff;  // Number of dwords in parameter table
+      if (sfdp_data[14+8*i] == 0) {
+        y = sfdp_data[13+8*i] << 8 | sfdp_data[12+8*i];
+        if (y<512 && (y+4*x)<=512) {
+          #if 0 && defined QSPI_VERBOSE // || defined QSPI_VERBOSE_SMALL
+          printf("Copy %d words from %04x to %04x\n", x, y & 0xffff, z & 0xffff);
+          #endif
+          sfdp_data[12+8*i] = z & 0xff;
+          sfdp_data[13+8*i] = (z >> 8) & 0xff;
+          for (x=0; x < sfdp_data[11+8*i]; x++) {
+            sfdp_data[z++] = sfdp_data[y++];
+            sfdp_data[z++] = sfdp_data[y++];
+            sfdp_data[z++] = sfdp_data[y++];
+            sfdp_data[z++] = sfdp_data[y++];
+          }
+        #if 1
+        } else {          
+          spi_cs_high();
+          // Setup SFDP address y
+          POKE(0xD681, 0x00);
+          POKE(0xD682, y & 0xff);
+          POKE(0xD683, (y >> 8) & 0xff);
+          POKE(0xD684, 0x00);
+          // Read SFDP
+          POKE(0xD680, 0x6D);
+          // Give time to complete
+          for (y = 0; y < 512; y++)
+            continue;
+          spi_cs_high();
+          lcopy(0xffd6e00L, (unsigned long)(sfdp_data+z), 4*x);
+          spi_cs_high();
+          delay();
+          spi_clock_high();
+          delay();
+          sfdp_data[12+8*i] = z & 0xff;
+          sfdp_data[13+8*i] = (z >> 8) & 0xff;
+          z += 4*x;
+        #endif
+        }
+      #if 0
+      } else {
+        printf("SFDP structure above 64k...");
+      #endif
+      }
+    }
+    // Clear remaining of buffer
+    #if 1
+    while (z < 512)
+      sfdp_data[z++] = 0xff;
+    #endif
+  }
+  else
+  { // Clear invalid buffer
+    for (i=0; i<512; i++)
+      sfdp_data[i] = 0xff;
+  }
+}
+
 void read_registers(void)
 {
 
   // Status Register 1 (SR1)
-  spi_cs_high();
-  spi_clock_high();
-  delay();
-  spi_cs_low();
-  delay();
-  spi_tx_byte(0x05);
-  reg_sr1 = spi_rx_byte();
-  spi_cs_high();
-  delay();
+  read_sr1();
 
   // Config Register 1 (CR1)
-  spi_cs_high();
-  spi_clock_high();
-  delay();
-  spi_cs_low();
-  delay();
-  spi_tx_byte(0x35);
-  reg_cr1 = spi_rx_byte();
-  spi_cs_high();
-  delay();
+  read_cr1();
+
 }
 
 void read_sr1(void)
@@ -1934,9 +2400,128 @@ void read_sr1(void)
   delay();
 }
 
+void read_scur(void)
+{
+  // Security Register (SCUR)
+  spi_cs_high();
+  spi_clock_high();
+  delay();
+  spi_cs_low();
+  delay();
+  spi_tx_byte(0x2B);
+  reg_scur = spi_rx_byte();
+  spi_cs_high();
+  delay();
+}
+
+void write_scur(unsigned char val)
+{
+  // Security Register (SCUR)
+  spi_cs_high();
+  spi_clock_high();
+  delay();
+  spi_cs_low();
+  delay();
+  spi_tx_byte(0x2F);
+  spi_tx_byte(val);
+  spi_cs_high();
+  delay();
+}
+
+// void write_scur(unsigned char val)
+// {
+//   // Security Register (SCUR)
+//   spi_cs_high();
+//   spi_clock_high();
+//   delay();
+//   spi_cs_low();
+//   delay();
+//   spi_tx_byte(0x2F);
+//   // spi_tx_byte(val);
+//   spi_cs_high();
+//   delay();
+// }
+
+/*
+void read_sr2(void)
+{
+  // Status Register 2 (SR2)
+  spi_cs_high();
+  spi_clock_high();
+  delay();
+  spi_cs_low();
+  delay();
+  spi_tx_byte(0x07);
+  reg_sr2 = spi_rx_byte();
+  spi_cs_high();
+  delay();
+}
+*/
+
+void read_cr1(void)
+{
+  // Config Register 1 (CR1)
+  spi_cs_high();
+  spi_clock_high();
+  delay();
+  spi_cs_low();
+  delay();
+  spi_tx_byte(0x15);
+  reg_cr1 = spi_rx_byte();
+  spi_cs_high();
+  delay();
+}
+
+void write_srcr(unsigned char sr, unsigned char cr)
+{
+  // Write Status and Config Registers (SR1+CR1)
+  spi_cs_high();
+  spi_clock_high();
+  delay();
+  spi_cs_low();
+  delay();
+  spi_tx_byte(0x01);
+  // First SR1 in lo-byte
+  spi_tx_byte(sr);
+  // Then CR1 in hi-byte
+  spi_tx_byte(cr);
+  spi_cs_high();
+  delay();
+}
+
+/*
+void read_cr2(void)
+{
+  // Config Register 2 (CR2)
+  spi_cs_high();
+  spi_clock_high();
+  delay();
+  spi_cs_low();
+  delay();
+  spi_tx_byte(0x15);
+  reg_cr2 = spi_rx_byte();
+  spi_cs_high();
+  delay();
+}
+
+void read_cr3(void)
+{
+  // Config Register 3 (CR3)
+  spi_cs_high();
+  spi_clock_high();
+  delay();
+  spi_cs_low();
+  delay();
+  spi_tx_byte(0x33);
+  reg_cr3 = spi_rx_byte();
+  spi_cs_high();
+  delay();
+}
+*/
+
 void read_ppbl(void)
 {
-  // PPB Lock Register
+  // PSPB Lock Register
   spi_cs_high();
   spi_clock_high();
   delay();
@@ -1954,6 +2539,7 @@ void read_ppb_for_sector(unsigned long sector_start)
   delay();
   spi_cs_low();
   delay();
+  // RDSPB
   spi_tx_byte(0xe2);
   spi_tx_byte(sector_start>>24);
   spi_tx_byte(sector_start>>16);
@@ -1965,6 +2551,7 @@ void read_ppb_for_sector(unsigned long sector_start)
 
 void spi_write_enable(void)
 {
+  reg_sr1 = 0x00;
   while (!(reg_sr1 & 0x02)) {
     POKE(0xD680, 0x66);
 
@@ -1983,7 +2570,7 @@ void spi_write_disable(void)
   spi_cs_high();
   delay();
 
-  read_sr1();
+  reg_sr1 = 0x02;
   while (reg_sr1 & 0x02) {
     spi_cs_high();
     spi_clock_high();
@@ -2000,6 +2587,7 @@ void spi_write_disable(void)
 
 void spi_clear_sr1(void)
 {
+  reg_sr1 = 0x60;
   while ((reg_sr1 & 0x60)) {
     POKE(0xD680, 0x6a);
 
@@ -2008,6 +2596,19 @@ void spi_clear_sr1(void)
     //    press_any_key(0, 0);
   }
 }
+
+/*
+void spi_clear_sr2(void)
+{
+  while ((reg_sr2 & 0x60)) {
+    POKE(0xD680, 0x6a);
+
+    read_sr2();
+    //    printf("reg_sr2=$%02x\n",reg_sr2);
+    //    press_any_key(0, 0);
+  }
+}
+*/
 
 /***************************************************************************
 
@@ -2222,11 +2823,20 @@ void flash_reset(void)
     delay();
   }
 
+  // RSTEN
   spi_clock_high();
   delay();
   spi_cs_low();
   delay();
-  spi_tx_byte(0xf0);
+  spi_tx_byte(0x66);
+  spi_cs_high();
+
+  // RST
+  spi_clock_high();
+  delay();
+  spi_cs_low();
+  delay();
+  spi_tx_byte(0x99);
   spi_cs_high();
   usleep(10000);
 }

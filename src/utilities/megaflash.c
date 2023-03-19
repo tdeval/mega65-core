@@ -216,8 +216,15 @@ void main(void)
           y &= data_buffer[x];
       }
       else {
-        //      for(i=0;i<255;i++) printf("%02x",data_buffer[i]);
-        //      printf("\n");
+        for (i=0;i<255;i++) {
+          if (!(i & 15))
+            printf("+%03x : ", i);
+          printf("%02x", data_buffer[i]);
+          if ((i & 15) == 15)
+            printf("\n");
+        }
+        // for(i=0;i<255;i++) printf("%02x",data_buffer[i]);
+        // printf("\n");
         printf("(First sector not empty. Code $%02x FOO!)\n", y);
       }
 

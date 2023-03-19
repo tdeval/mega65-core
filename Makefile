@@ -555,27 +555,43 @@ mfmsimulate: $(GHDL_DEPEND) $(MFMFILES) $(ASSETS)/synthesised-60ns.dat
 	$(GHDL) -m test_mfm
 	( ./test_mfm || $(GHDL) -r test_mfm )
 
-QSPIFILES=$(VHDLSRCDIR)/mfm_bits_to_bytes.vhdl \
-	 $(VHDLSRCDIR)/mfm_decoder.vhdl \
-	 $(VHDLSRCDIR)/mfm_gaps.vhdl \
-	 $(VHDLSRCDIR)/mfm_gaps_to_bits.vhdl \
-	 $(VHDLSRCDIR)/mfm_quantise_gaps.vhdl \
-	 $(VHDLSRCDIR)/rll27_gaps_to_bits.vhdl \
-	 $(VHDLSRCDIR)/rll27_quantise_gaps.vhdl \
-	 $(VHDLSRCDIR)/raw_bits_to_gaps.vhdl \
-	 $(VHDLSRCDIR)/crc1581.vhdl \
-	 $(VHDLSRCDIR)/sdcardio.vhdl \
-	 $(VHDLSRCDIR)/cputypes.vhdl \
-	 $(VHDLSRCDIR)/s25fl512s.vhd \
-	 $(VHDLSRCDIR)/gen_utils.vhd \
-	 $(VHDLSRCDIR)/test_qspi.vhdl
+VIVADODIR=/opt/Xilinx/Vivado/2022.2
+UNISIMLIBDIR=$(VIVADODIR)/data/vhdl/src/unisims/retarget
+
+QSPIFILES=$(VHDLSRCDIR)/conversions.vhdl \
+	  $(VHDLSRCDIR)/gen_utils.vhdl \
+	  $(VHDLSRCDIR)/cputypes.vhdl \
+	  $(VHDLSRCDIR)/debugtools.vhdl \
+	  $(VHDLSRCDIR)/crc1581.vhdl \
+	  $(VHDLSRCDIR)/ghdl_ram8x4096_sync.vhdl \
+	  $(VHDLSRCDIR)/i2c_master.vhdl \
+	  $(VHDLSRCDIR)/icape2sim.vhdl \
+	  $(VHDLSRCDIR)/mfm_bits_to_bytes.vhdl \
+	  $(VHDLSRCDIR)/mfm_bits_to_gaps.vhdl \
+	  $(VHDLSRCDIR)/mfm_gaps.vhdl \
+	  $(VHDLSRCDIR)/mfm_quantise_gaps.vhdl \
+	  $(VHDLSRCDIR)/mfm_gaps_to_bits.vhdl \
+	  $(VHDLSRCDIR)/rll27_quantise_gaps.vhdl \
+	  $(VHDLSRCDIR)/rll27_gaps_to_bits.vhdl \
+	  $(VHDLSRCDIR)/mfm_decoder.vhdl \
+	  $(VHDLSRCDIR)/raw_bits_to_gaps.vhdl \
+	  $(VHDLSRCDIR)/reconfig.vhdl \
+	  $(VHDLSRCDIR)/rll27_bits_to_gaps.vhdl \
+	  $(VHDLSRCDIR)/sdcard.vhdl \
+	  $(VHDLSRCDIR)/touch.vhdl \
+	  $(VHDLSRCDIR)/test_qspi_mx25l51245g.vhdl \
+	  $(VHDLSRCDIR)/vfpga/vfpga_clock_controller_pausable.vhdl \
+	  $(VHDLSRCDIR)/sdcardio_mx25l.vhdl \
+	  $(VHDLSRCDIR)/s25fl512s.vhd
+	  # $(VHDLSRCDIR)/sdcardio.vhdl \
+	  # $(VHDLSRCDIR)/mx25l51245g.vhdl
 
 qspisimulate: $(GHDL_DEPEND) $(QSPIFILES) $(ASSETS)/synthesised-60ns.dat
 	$(info =============================================================)
 	$(info ~~~~~~~~~~~~~~~~> Making: $@)
-	$(GHDL) -i $(QSPIFILES)
-	$(GHDL) -m test_qspi
-	( ./test_qspi --vcd=qspi.vcd || $(GHDL) -r test_qspi --vcd=qspi.vcd )
+	$(GHDL) -i --std=02 --work=work $(QSPIFILES) --work=UNISIM $(UNISIMLIBDIR)/*.vhd $(UNISIMLIBDIR)_VCOMP.vhd 
+	$(GHDL) -m --std=02 -frelaxed test_qspi_mx25l51245g
+	( ./test_qspi_mx25l51245g --vcd=qspi.vcd || $(GHDL) -r test_qspi_mx25l51245g --vcd=qspi.vcd )
 
 READCOMPFILES=	$(VHDLSRCDIR)/test_readcomp.vhdl $(VHDLSRCDIR)/floppy_read_compensator.vhdl
 readcompsimulate: $(GHDL_DEPEND) $(READCOMPFILES)
@@ -829,7 +845,7 @@ $(SDCARD_DIR)/ONBOARD.M65:       $(UTILDIR)/onboard.c $(UTILDIR)/version.s $(CC6
 	$(info =============================================================)
 	$(info ~~~~~~~~~~~~~~~~> Making: $@)
 	mkdir -p $(SDCARD_DIR)
-	$(CL65) -I $(SRCDIR)/mega65-libc/cc65/include -DA100T -O -o $(SDCARD_DIR)/ONBOARD.M65 --mapfile $(UTILDIR)/ONBOARD.map $(UTILDIR)/version.s $< $(UTILDIR)/qspicommon.c $(SRCDIR)/mega65-libc/cc65/src/memory.c $(SRCDIR)/mega65-libc/cc65/src/hal.c $(SRCDIR)/mega65-libc/cc65/src/time.c $(SRCDIR)/mega65-libc/cc65/src/targets.c
+	$(CL65) -I $(SRCDIR)/mega65-libc/cc65/include -DA200T -DQSPI_VERBOSE -O -o $(SDCARD_DIR)/ONBOARD.M65 --mapfile $(UTILDIR)/ONBOARD.map $(UTILDIR)/version.s $< $(UTILDIR)/qspicommon_mx25l.c $(SRCDIR)/mega65-libc/cc65/src/memory.c $(SRCDIR)/mega65-libc/cc65/src/hal.c $(SRCDIR)/mega65-libc/cc65/src/time.c $(SRCDIR)/mega65-libc/cc65/src/targets.c
 # Make sure that result is not too big.  Top must be below < $$8000 after loading, so that
 # it doesn't overlap with hypervisor
 	@echo $$(stat -c"~~~~~~~~~~~~~~~~> ONBOARD.M65 size is %s (max 29000)" $(SDCARD_DIR)/ONBOARD.M65)
@@ -841,7 +857,7 @@ $(SDCARD_DIR)/ONBOARD.M65:       $(UTILDIR)/onboard.c $(UTILDIR)/version.s $(CC6
 $(UTILDIR)/megaflash-a100t.prg:       $(UTILDIR)/megaflash.c $(UTILDIR)/qspicommon.c $(UTILDIR)/qspicommon.h $(CC65_DEPEND) # $(UTILDIR)/userwarning.c
 	$(info =============================================================)
 	$(info ~~~~~~~~~~~~~~~~> Making: $@)
-	$(CL65) -I $(SRCDIR)/mega65-libc/cc65/include -DA100T -O -o $(UTILDIR)/megaflash-a100t.prg \
+	$(CL65) -I $(SRCDIR)/mega65-libc/cc65/include -DA100T -DQSPI_VERBOSE -O -o $(UTILDIR)/megaflash-a100t.prg \
 		--add-source -Ln $*.label --listing $*.list \
 		--mapfile $*.map $< \
 		$(SRCDIR)/mega65-libc/cc65/src/memory.c $(SRCDIR)/mega65-libc/cc65/src/hal.c $(UTILDIR)/qspicommon.c
@@ -850,13 +866,13 @@ $(UTILDIR)/megaflash-a100t.prg:       $(UTILDIR)/megaflash.c $(UTILDIR)/qspicomm
 	@echo $$(stat -c"~~~~~~~~~~~~~~~~> megaflash-a100t.prg size is %s (max 29000)" $(UTILDIR)/megaflash-a100t.prg)
 	@test -n "$$(find $(UTILDIR)/megaflash-a100t.prg -size -29000c)"
 
-$(UTILDIR)/megaflash-a200t.prg:       $(UTILDIR)/megaflash.c $(UTILDIR)/qspicommon.c $(UTILDIR)/qspicommon.h $(CC65_DEPEND) # $(UTILDIR)/userwarning.c
+$(UTILDIR)/megaflash-a200t.prg:       $(UTILDIR)/megaflash.c $(UTILDIR)/qspicommon_mx25l.c $(UTILDIR)/qspicommon.h $(CC65_DEPEND) # $(UTILDIR)/userwarning.c
 	$(info =============================================================)
 	$(info ~~~~~~~~~~~~~~~~> Making: $@)
-	$(CL65) -I $(SRCDIR)/mega65-libc/cc65/include -DA200T -O -o $(UTILDIR)/megaflash-a200t.prg \
+	$(CL65) -I $(SRCDIR)/mega65-libc/cc65/include -DA200T -DQSPI_VERBOSE -O -o $(UTILDIR)/megaflash-a200t.prg \
 		--add-source -Ln $*.label --listing $*.list \
 		--mapfile $*.map $< \
-		$(SRCDIR)/mega65-libc/cc65/src/memory.c $(SRCDIR)/mega65-libc/cc65/src/hal.c $(UTILDIR)/qspicommon.c
+		$(SRCDIR)/mega65-libc/cc65/src/memory.c $(SRCDIR)/mega65-libc/cc65/src/hal.c $(UTILDIR)/qspicommon_mx25l.c
 # Make sure that result is not too big.  Top must be below < $$8000 after loading, so that
 # it doesn't overlap with hypervisor
 	@echo $$(stat -c"~~~~~~~~~~~~~~~~> megaflash-a200t.prg size is %s (max 29000)" $(UTILDIR)/megaflash-a200t.prg)
@@ -875,19 +891,19 @@ $(UTILDIR)/joyflash-a200t.prg:       $(UTILDIR)/joyflash.c $(UTILDIR)/qspijoy.c 
 	@test -n "$$(find $(UTILDIR)/joyflash-a200t.prg -size -29000c)"
 
 
-$(UTILDIR)/jtagflash.prg:       $(UTILDIR)/jtagflash.c $(UTILDIR)/version.h $(UTILDIR)/qspicommon.c $(UTILDIR)/qspicommon.h $(CC65_DEPEND)
+$(UTILDIR)/jtagflash.prg:       $(UTILDIR)/jtagflash.c $(UTILDIR)/version.h $(UTILDIR)/qspicommon_mx25l.c $(UTILDIR)/qspicommon.h $(CC65_DEPEND)
 	$(info =============================================================)
 	$(info ~~~~~~~~~~~~~~~~> Making: $@)
 	$(CL65) -I $(SRCDIR)/mega65-libc/cc65/include -O -o $(UTILDIR)/jtagflash.prg \
 		--add-source --listing $*.list --mapfile $*.map -DQSPI_VERBOSE $< \
-		$(UTILDIR)/qspicommon.c $(SRCDIR)/mega65-libc/cc65/src/memory.c $(SRCDIR)/mega65-libc/cc65/src/hal.c $(SRCDIR)/mega65-libc/cc65/src/time.c $(SRCDIR)/mega65-libc/cc65/src/targets.c
+		$(UTILDIR)/qspicommon_mx25l.c $(SRCDIR)/mega65-libc/cc65/src/memory.c $(SRCDIR)/mega65-libc/cc65/src/hal.c $(SRCDIR)/mega65-libc/cc65/src/time.c $(SRCDIR)/mega65-libc/cc65/src/targets.c
 
-$(UTILDIR)/jtagdebug.prg:       $(UTILDIR)/jtagflash.c $(UTILDIR)/version.h $(UTILDIR)/qspicommon.c $(UTILDIR)/qspicommon.h $(CC65_DEPEND)
+$(UTILDIR)/jtagdebug.prg:       $(UTILDIR)/jtagflash.c $(UTILDIR)/version.h $(UTILDIR)/qspicommon_mx25l.c $(UTILDIR)/qspicommon.h $(CC65_DEPEND)
 	$(info =============================================================)
 	$(info ~~~~~~~~~~~~~~~~> Making: $@)
 	$(CL65) -I $(SRCDIR)/mega65-libc/cc65/include -O -o $(UTILDIR)/jtagdebug.prg \
 		--add-source --listing $*.list --mapfile $*.map -DQSPI_VERBOSE -DQSPI_FLASH_INSPECT -DQSPI_ERASE_ZERO $< \
-		$(UTILDIR)/qspicommon.c $(SRCDIR)/mega65-libc/cc65/src/memory.c $(SRCDIR)/mega65-libc/cc65/src/hal.c $(SRCDIR)/mega65-libc/cc65/src/time.c $(SRCDIR)/mega65-libc/cc65/src/targets.c
+		$(UTILDIR)/qspicommon_mx25l.c $(SRCDIR)/mega65-libc/cc65/src/memory.c $(SRCDIR)/mega65-libc/cc65/src/hal.c $(SRCDIR)/mega65-libc/cc65/src/time.c $(SRCDIR)/mega65-libc/cc65/src/targets.c
 
 
 $(UTILDIR)/hyperramtest.prg:       $(UTILDIR)/hyperramtest.c $(wildcard $(SRCDIR)/mega65-libc/cc65/src/*.c) $(wildcard $(SRCDIR)/mega65-libc/cc65/src/*.s) $(wildcard $(SRCDIR)/mega65-libc/cc65/include/*.h) $(CC65_DEPEND)

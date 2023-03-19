@@ -27,18 +27,18 @@ architecture behavioural of reconfig is
   signal cs : std_logic := '1'; -- interface active when low
   signal rw : std_logic := '1'; -- Read or _Write
 
-  type reg_value_pair is ARRAY(0 TO 70) OF unsigned(35 DOWNTO 0);    
-  
+  type reg_value_pair is ARRAY(0 TO 70) OF unsigned(35 DOWNTO 0);
+
   signal bitstream_values : reg_value_pair := (
     x"0FFFFFFFF", -- Dummy word CS=0, RDWR=0
     x"0FFFFFFFF", -- Dummy word
     x"0FFFFFFFF", -- Dummy word
     x"0FFFFFFFF", -- Dummy word
     x"0FFFFFFFF", -- Dummy word
-    x"0AA995566", -- Sync word 
+    x"0AA995566", -- Sync word
     x"020000000", -- Type 1 NOOP
     x"020000000", -- Type 1 NOOP
-   
+
     x"030020001", -- Type 1 write to WBSTAR
     x"000000000", -- Warm-boot start address
     x"020000000", -- Type 1 NOOP
@@ -52,20 +52,20 @@ architecture behavioural of reconfig is
     -- Offset 16: read WBSTAR or other register
     x"3FFFFFFFF", -- Dummy word with CS and R/W released
     x"020000000", -- Type 1 NOOP
-    x"0AA995566", -- Sync word 
-    x"020000000", -- Type 1 NOOP     
+    x"0AA995566", -- Sync word
+    x"020000000", -- Type 1 NOOP
     x"020000000", -- Type 1 NOOP
 
 
     -- Offset 21: The actual read command
 --    x"20020001", -- Type 1 read from WBSTAR (10000)
 --    x"2002c001", -- Type 1 read from BOOTSTS (10110)
---    x"020012001", -- Type 1 read from COR0 (01001) (has value with ones and  zeroes for easy spotting)    
+--    x"020012001", -- Type 1 read from COR0 (01001) (has value with ones and  zeroes for easy spotting)
     x"028018001", -- Type 1 read from IDCODE (01100) (has value with ones and  zeroes for easy spotting)
 
-    -- Offset 22: Switch to read and allow time for value to emerge 
+    -- Offset 22: Switch to read and allow time for value to emerge
     x"220000000", -- Release CS
-    x"320000000", -- Switch to READ, CS still released    
+    x"320000000", -- Switch to READ, CS still released
     x"120000000", -- Type 1 NOOP with CS asserted and R/W = READ
     x"120000000", -- Type 1 NOOP with CS asserted and R/W = READ
     x"120000000", -- Type 1 NOOP with CS asserted and R/W = READ
@@ -77,19 +77,19 @@ architecture behavioural of reconfig is
     x"020000000", -- Desync
     x"020000000", -- Type 1 NOOP
     x"020000000", -- Type 1 NOOP
-    
-    
+
+
     others => x"3FFFFFFFF"
     );
 
   signal counter : integer range 0 to 99 := 99;
 
   signal set_toggle : std_logic := '0';
-  
+
 begin
 
-  ICAPE2_inst: ICAPE2 
---  ICAPE2_inst: entity work.ICAPE2 
+  -- ICAPE2_inst: entity ICAPE2 
+ ICAPE2_inst: entity work.ICAPE2 
     generic map(
       DEVICE_ID => X"3651093",    -- Specifies the pre-programmed
       -- Device ID value to be used for
@@ -107,7 +107,7 @@ begin
       I => std_logic_vector(icape_in),
       rdwrb => rw
       );
-  
+
   process (clock) is
   begin
 
@@ -124,15 +124,15 @@ begin
               boot_address(bb*8+j) <= icape_out(bb*8+7-j);
             end loop;
           end loop;
-          
+
 --          boot_address <= icape_out;
         end if;
-        
-        counter <= counter + 1;        
 
-        report "counter = " & integer'image(counter)
-          & ", writing $" & to_hstring(bitstream_values(counter)(31 downto 0));
-        
+        counter <= counter + 1;
+
+        report "counter = " & integer'image(counter);
+          -- & ", writing $" & to_hstring(bitstream_values(counter)(31 downto 0));
+
         icape_in(31) <= bitstream_values(counter)(24);
         icape_in(30) <= bitstream_values(counter)(25);
         icape_in(29) <= bitstream_values(counter)(26);
@@ -183,10 +183,10 @@ begin
         if trigger_reconfigure = '1' then
           counter <= 0;
         else
-          counter <= 16; 
+          counter <= 16;
         end if;
       end if;
-            
+
     end if;
   end process;
 

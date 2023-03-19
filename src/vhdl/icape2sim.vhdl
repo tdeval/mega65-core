@@ -42,9 +42,9 @@ begin
       report "ICAPE2:"
         & " CS=" & std_logic'image(CSIB)
         & " RDWRB=" & std_logic'image(RDWRB)
-        & " IN=$" & to_hstring(I)
+        -- & " IN=$" & to_hstring(I)
         & " (reversed = $"        
-        & to_hstring(rev)
+        -- & to_hstring(rev)
         & ").";
   end process;  
     
