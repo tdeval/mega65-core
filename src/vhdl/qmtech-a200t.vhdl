@@ -356,7 +356,9 @@ begin
       flopled2 => flopled2_drive,
       flopledsd => flopledsd_drive,
       flopmotor => flopmotor_drive,
-            
+
+      eth_load_enable => '0',
+
       kio8 => xil_io1,
       kio9 => xil_io2,
       kio10 => xil_io3,
@@ -416,7 +418,7 @@ begin
                clock81p => pixelclock, -- 80MHz
                clock41 => cpuclock, -- 40MHz
                clock50 => ethclock,
-               clock162 => clock163,
+               clock163 => clock163,
                clock27 => clock27,
                clock200 => clock200
                );

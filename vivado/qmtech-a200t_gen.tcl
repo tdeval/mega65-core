@@ -93,7 +93,9 @@ if {[string equal [get_filesets -quiet sources_1] ""]} {
 set obj [get_filesets sources_1]
 # Import local files from the original project
 set files [list \
- "[file normalize "$origin_dir/src/vhdl/clocking.vhdl"]"\
+ "[file normalize "$origin_dir/src/vhdl/clocking50mhz.vhdl"]"\
+ "[file normalize "$origin_dir/src/vhdl/icape2sim.vhdl"]"\
+ "[file normalize "$origin_dir/src/vhdl/reconfig.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/debugtools.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/cputypes.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/victypes.vhdl"]"\
@@ -118,6 +120,8 @@ set files [list \
  "[file normalize "$origin_dir/src/vhdl/ghdl_ram32x1024_sync.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/colourram.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/crc.vhdl"]"\
+ "[file normalize "$origin_dir/src/vhdl/edid_i2c.vhdl"]"\
+ "[file normalize "$origin_dir/src/vhdl/hdmi_i2c.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/bitplanes.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/vicii_sprites.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/UART_TX_CTRL.vhdl"]"\
@@ -137,7 +141,11 @@ set files [list \
  "[file normalize "$origin_dir/src/vhdl/pcm_transceiver.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/touch.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/i2c_master.vhdl"]"\
+ "[file normalize "$origin_dir/src/vhdl/i2c_controller.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/i2c_wrapper.vhdl"]"\
+ "[file normalize "$origin_dir/src/vhdl/mega65r2_i2c.vhdl"]"\
+ "[file normalize "$origin_dir/src/vhdl/mega65r3_i2c.vhdl"]"\
+ "[file normalize "$origin_dir/src/vhdl/grove_i2c.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/mfm_bits_to_bytes.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/mfm_bits_to_gaps.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/mfm_decoder.vhdl"]"\
@@ -172,7 +180,6 @@ set files [list \
  "[file normalize "$origin_dir/src/vhdl/viciv.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/iomapper.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/gs4510.vhdl"]"\
- "[file normalize "$origin_dir/src/vhdl/reconfig.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/neotrng.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/vfpga/overlay_IP.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/vfpga/vfpga_clock_controller_pausable.vhdl"]"\
@@ -288,6 +295,10 @@ set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 
 set file "vhdl/sid_coeffs_mux.vhdl"
+set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
+set_property -name "file_type" -value "VHDL" -objects $file_obj
+
+set file "vhdl/edid_i2c.vhdl"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 
@@ -623,7 +634,7 @@ set file "vhdl/fpgatemp.vhdl"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 
-set file "vhdl/clocking.vhdl"
+set file "vhdl/clocking50mhz.vhdl"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 
